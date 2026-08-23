@@ -35,7 +35,6 @@ h1 {
 
 canvas {
   display: block;
-  background: linear-gradient(180deg, #bdeaff 0%, #d9f7be 100%);
   touch-action: manipulation;
 }
 
@@ -76,6 +75,42 @@ canvas {
 
 .overlay button:hover {
   transform: scale(1.05);
+}
+
+#leaderboard-modal h2 {
+  color: #ffcc33;
+  text-shadow: 2px 2px 0px #4a3223;
+  margin-bottom: 8px;
+}
+
+#player-initials:focus {
+  outline: none;
+  border-color: #ffcc33 !important;
+  box-shadow: 0 0 8px rgba(255, 204, 51, 0.6);
+}
+
+#dig-btn {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  padding: 14px 20px;
+  font-size: 16px;
+  font-weight: bold;
+  border: 3px solid #4a3223;
+  border-radius: 999px;
+  background: #ffcc33;
+  color: #4a3223;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  animation: pulse-dig 0.8s infinite alternate;
+}
+#dig-btn.hidden { display: none; }
+#dig-btn:active { transform: scale(0.94); background: #f5b400; }
+@keyframes pulse-dig {
+  from { box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); }
+  to   { box-shadow: 0 4px 18px rgba(255, 204, 51, 0.7); }
 }
 
 #hud {

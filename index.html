@@ -15,7 +15,7 @@
       <div id="start-screen" class="overlay">
         <h2>Desvie dos troncos e colete bananas!</h2>
         <p>Aperte <b>ESPAÇO</b>, <b>↑</b> ou toque na tela para pular.</p>
-        <p>Pule perto de um cipó para agarrá-lo e atravessar rios. Dê <b>dois toques rápidos</b> para soltar!</p>
+        <p>Pule perto de um cipó para agarrá-lo e atravessar rios. Aperte <b>de novo</b> para soltar!</p>
         <button id="start-btn">Começar</button>
       </div>
 
@@ -24,6 +24,15 @@
         <p id="final-score"></p>
         <button id="restart-btn">Jogar de novo</button>
       </div>
+
+      <div id="victory-screen" class="overlay hidden">
+        <h2>🏆 Vitória Cósmica! 🛸</h2>
+        <p>Você escapou do caçador e viajou para as estrelas! 🦍✨</p>
+        <p id="victory-score"></p>
+        <button id="restart-victory-btn">Jogar de novo</button>
+      </div>
+
+      <button id="dig-btn" class="hidden">⬇ CAVAR</button>
     </div>
 
     <div id="hud">
@@ -38,6 +47,6 @@
     </div>
   </div>
 
-  <script src="game.js"></script>
+  <script type="module" src="game.js?v=30"></script>
 </body>
 </html>
