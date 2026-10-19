@@ -32,9 +32,12 @@
   const RIVER_LOG_CLEARANCE = 160; // px of clear runway required in front of the last log before a river can spawn
   const ROCK_LOG_CLEARANCE = 160; // px of clear runway required in front of the last log before a rock can spawn
   const ROCK_RIVER_CLEARANCE = 320; // px of clear runway required between a rock and a river (either order) — keeps the two big set-pieces well apart
-  const ROCK_DIG_GRACE = 50; // frames allowed to start digging (holding a seta para baixo) once the monkey reaches a rock
-  const ROCK_DIG_DURATION = 55; // frames of held down-arrow needed to dig all the way under a rock
-  const ROCK_DIG_DEPTH = 30; // px the monkey sinks into the ground while digging
+  const ROCK_DIG_GRACE = 50; // frames to start digging at the tunnel mouth before the rock halts the escape
+  const ARC_MARGIN = 30; // px the tunnel arc reaches beyond the rock on each side — it starts before the rock and ends after it
+  const TUNNEL_DEPTH = 46; // px the monkey (and hunter) sink at the deepest point of the arc, right under the rock
+  const DIG_SCROLL_SPEED = 2.4; // px/frame the world inches forward while the player holds down to dig through the arc
+  const HUNTER_TUNNEL_SLOW = 0.55; // closing-speed multiplier while the hunter is dipping through a tunnel (helps the monkey escape)
+  const HUNTER_ROCK_BLOCK = 0.3; // closing-speed multiplier while the hunter is stuck at an un-tunneled rock
 
   let highScore = Number(localStorage.getItem("monkeyGameHighScore") || 0);
   highscoreEl.textContent = `Recorde: ${highScore}`;
@@ -43,7 +46,7 @@
 
   let monkey, logs, bananas, rivers, rocks, speed, score, bananaCount, spawnTimer, bananaTimer, riverTimer, rockTimer, frame;
   let hunterGap, gameOverReason, hunterSwimming, hunterSwimFramesLeft, lastSwingTapFrame;
-  let activeRock, rockGraceLeft, digProgress, groundOffset;
+  let activeRock, rockGraceLeft, groundOffset, hunterTunnelDip;
   let downHeld = false; // tracks the down-arrow being held, needed for the dig-to-clear-a-rock mechanic
 
   function resetGame() {
@@ -77,8 +80,8 @@
     lastSwingTapFrame = -Infinity;
     activeRock = null;
     rockGraceLeft = 0;
-    digProgress = 0;
     groundOffset = 0;
+    hunterTunnelDip = 0;
     gameOverReason = null;
     hunterMeterEl.classList.remove("critical");
     hunterFillEl.style.width = "0%";
@@ -145,10 +148,11 @@
     logs.push({ x: W + 20, y: GROUND_Y - h, w, h });
   }
 
-  // rocks are a hard wall — too tall to jump, they force the monkey to stop and dig underneath
+  // rocks are a hard wall — too tall to jump, they force the monkey to dig an arc-shaped tunnel
+  // underneath. digU tracks how far along that arc has been carved (0 = none, 1 = fully through).
   function spawnRock() {
     const w = 55 + Math.random() * 20;
-    rocks.push({ x: W + 20, w, h: 46 });
+    rocks.push({ x: W + 20, w, h: 46, tunneled: false, digU: 0 });
   }
 
   function spawnBanana() {
@@ -200,7 +204,8 @@
       const idleSway = t >= 1 ? Math.sin(frame * 0.08) * 4 : 0;
       monkey.y = monkey.swingStartY - arc - idleSway;
       // no automatic release otherwise: the player must double-tap to let go (see handleSwingRelease)
-    } else {
+    } else if (!activeRock) {
+      // normal gravity while free to run — during a tunnel dig, monkey.y follows the arc (below)
       monkey.vy += GRAVITY;
       monkey.y += monkey.vy;
       if (monkey.y >= GROUND_Y - monkey.h) {
@@ -210,10 +215,31 @@
       }
     }
 
-    // everything below only advances while the monkey is free to run — reaching a rock freezes
-    // the whole world (except the hunter, who keeps closing in) until the rock is dug through
+    const digRefX = monkey.x + monkey.w / 2; // the point on the monkey tracked along the tunnel arc
+
+    // start a tunnel encounter the moment the monkey (on the ground) reaches the mouth of a rock's
+    // arc — the arc mouth sits ARC_MARGIN before the rock, so the monkey begins digging before it
+    if (!activeRock && !monkey.jumping && !monkey.swinging) {
+      for (const rock of rocks) {
+        if (rock.tunneled) continue;
+        const entryX = rock.x - ARC_MARGIN;
+        const exitX = rock.x + rock.w + ARC_MARGIN;
+        if (entryX <= digRefX && exitX > digRefX) {
+          activeRock = rock;
+          rockGraceLeft = ROCK_DIG_GRACE;
+          monkey.digging = false;
+          break;
+        }
+      }
+    }
+
+    // the world scrolls at full speed while running free; during a tunnel dig it only inches
+    // forward while the player holds the down arrow, so the monkey carves the arc bit by bit
+    const worldScroll = activeRock ? (downHeld ? DIG_SCROLL_SPEED : 0) : speed;
+
+    // spawns only happen while running free (not mid-dig)
     if (!activeRock) {
-      groundOffset = (groundOffset + speed) % 24;
+      groundOffset = (groundOffset + worldScroll) % 24;
 
       // spawn logs
       spawnTimer--;
@@ -271,89 +297,91 @@
         }
       }
 
-      // move logs
-      for (const log of logs) log.x -= speed;
-      logs = logs.filter((l) => l.x + l.w > -10);
+    }
 
-      // move bananas
-      for (const b of bananas) b.x -= speed;
-      bananas = bananas.filter((b) => b.x + b.w > -10 && !b.collected);
+    // move the world — this also runs during a dig (at worldScroll = 0 or DIG_SCROLL_SPEED), so the
+    // rock slides past the fixed monkey and the arc gets carved out from under it bit by bit
+    if (activeRock) groundOffset = (groundOffset + worldScroll) % 24;
 
-      // move rivers (kept around well past the screen edge so a far-behind hunter can still reach them)
-      for (const river of rivers) river.x -= speed;
-      rivers = rivers.filter((r) => r.x + r.w > -HUNTER_MAX_GAP - 60);
+    for (const log of logs) log.x -= worldScroll;
+    logs = logs.filter((l) => l.x + l.w > -10);
 
-      // move rocks
-      for (const rock of rocks) rock.x -= speed;
-      rocks = rocks.filter((r) => r.x + r.w > -10);
+    for (const b of bananas) b.x -= worldScroll;
+    bananas = bananas.filter((b) => b.x + b.w > -10 && !b.collected);
+
+    // rivers kept around well past the screen edge so a far-behind hunter can still reach them
+    for (const river of rivers) river.x -= worldScroll;
+    rivers = rivers.filter((r) => r.x + r.w > -HUNTER_MAX_GAP - 60);
+
+    for (const rock of rocks) rock.x -= worldScroll;
+    rocks = rocks.filter((r) => r.x + r.w > -10);
+
+    // the monkey follows the arc while a dig is active: u = how far along the arc the tracked point
+    // sits, 0 at the mouth (before the rock) to 1 at the far side (after the rock). Holding down
+    // scrolls the rock leftward, which advances u, so the monkey burrows down, under, then up.
+    if (activeRock) {
+      const entryX = activeRock.x - ARC_MARGIN;
+      const exitX = activeRock.x + activeRock.w + ARC_MARGIN;
+      const u = Math.max(0, Math.min(1, (digRefX - entryX) / (exitX - entryX)));
+      activeRock.digU = Math.max(activeRock.digU, u); // remember how much of the arc is carved
+      monkey.y = GROUND_Y - monkey.h + Math.sin(u * Math.PI) * TUNNEL_DEPTH;
+      monkey.digging = downHeld && u < 1;
+
+      // grace window: dawdling at the mouth without digging lets the rock end the escape
+      if (!downHeld && activeRock.digU < 0.02) {
+        rockGraceLeft--;
+        if (rockGraceLeft <= 0) {
+          endGame("rock");
+          return;
+        }
+      }
+
+      if (u >= 1) {
+        // emerged on the far side — the rock is fully tunneled and the monkey runs on
+        activeRock.tunneled = true;
+        activeRock = null;
+        monkey.digging = false;
+        monkey.y = GROUND_Y - monkey.h;
+      }
     }
 
     // collisions
     const hitbox = { x: monkey.x + 6, y: monkey.y + 6, w: monkey.w - 12, h: monkey.h - 12 };
-    for (const log of logs) {
-      if (rectsOverlap(hitbox, log)) {
-        endGame("log");
-        return;
-      }
-    }
-
-    // rocks: a boulder is too tall to jump over. Crashing into it airborne is a game over,
-    // but reaching it on the ground stops the monkey so the player can dig underneath instead
     if (!activeRock) {
+      for (const log of logs) {
+        if (rectsOverlap(hitbox, log)) {
+          endGame("log");
+          return;
+        }
+      }
+
+      // a boulder is too tall to jump — slamming into one while airborne is a game over.
+      // (Grounded approaches never reach here: they start a dig at the arc mouth beforehand.)
       for (const rock of rocks) {
-        const tallZone = { x: rock.x, y: GROUND_Y - 170, w: rock.w, h: 170 };
-        if (rectsOverlap(hitbox, tallZone)) {
-          if (monkey.jumping || monkey.swinging) {
-            endGame("rock");
-            return;
-          }
-          activeRock = rock;
-          rockGraceLeft = ROCK_DIG_GRACE;
-          digProgress = 0;
-          monkey.digging = false;
-          break;
+        if (rock.tunneled) continue;
+        const body = { x: rock.x, y: GROUND_Y - 170, w: rock.w, h: 170 };
+        if ((monkey.jumping || monkey.swinging) && rectsOverlap(hitbox, body)) {
+          endGame("rock");
+          return;
         }
       }
     }
 
-    // digging: the grace window requires holding the down arrow before it runs out, then holding
-    // it again drives the dig progress — releasing simply pauses at the current depth
-    if (activeRock) {
-      if (!monkey.digging) {
-        if (downHeld) {
-          monkey.digging = true;
-        } else {
-          rockGraceLeft--;
-          if (rockGraceLeft <= 0) {
-            endGame("rock");
-            return;
-          }
+    if (!activeRock) {
+      for (const b of bananas) {
+        if (!b.collected && rectsOverlap(hitbox, b)) {
+          b.collected = true;
+          bananaCount++;
+          score += 10;
+          hunterGap = Math.min(HUNTER_MAX_GAP, hunterGap + HUNTER_BANANA_BONUS);
         }
-      }
-      if (monkey.digging && downHeld) {
-        digProgress++;
-        monkey.y = GROUND_Y - monkey.h + Math.min(ROCK_DIG_DEPTH, (digProgress / ROCK_DIG_DURATION) * ROCK_DIG_DEPTH);
-        if (digProgress >= ROCK_DIG_DURATION) {
-          rocks = rocks.filter((r) => r !== activeRock);
-          activeRock = null;
-          monkey.digging = false;
-          monkey.y = GROUND_Y - monkey.h;
-          digProgress = 0;
-        }
-      }
-    }
-
-    for (const b of bananas) {
-      if (!b.collected && rectsOverlap(hitbox, b)) {
-        b.collected = true;
-        bananaCount++;
-        score += 10;
-        hunterGap = Math.min(HUNTER_MAX_GAP, hunterGap + HUNTER_BANANA_BONUS);
       }
     }
 
     // rivers: grab the vine while jumping to swing across, or fall in if grounded
+    // (skipped while digging a tunnel — the monkey is underground, nowhere near the water surface)
     for (const river of rivers) {
+      if (activeRock) break;
       const vineX = river.x + river.vineOffset;
       if (!monkey.swinging && !river.vineGrabbed && monkey.jumping) {
         const vineZone = { x: vineX - 12, y: GROUND_Y - 150, w: 24, h: 115 };
@@ -393,7 +421,26 @@
         }
       }
     }
-    const closing = hunterSwimming ? -HUNTER_SWIM_PENALTY : 0.16 + score / 2200;
+    let closing = hunterSwimming ? -HUNTER_SWIM_PENALTY : 0.16 + score / 2200;
+
+    // rocks and their tunnels affect the hunter too: he follows the same arc down through a tunnel
+    // (slower, so the monkey gains ground) or gets stuck scrambling at an un-tunneled boulder
+    hunterTunnelDip = 0;
+    for (const rock of rocks) {
+      const entryX = rock.x - ARC_MARGIN;
+      const exitX = rock.x + rock.w + ARC_MARGIN;
+      if (hunterX + 10 > entryX && hunterX - 10 < exitX) {
+        if (rock.tunneled) {
+          const u = Math.max(0, Math.min(1, (hunterX - entryX) / (exitX - entryX)));
+          hunterTunnelDip = Math.sin(u * Math.PI) * TUNNEL_DEPTH; // dips along the arc, below ground
+          closing *= HUNTER_TUNNEL_SLOW;                    // slowed while underground
+        } else {
+          closing *= HUNTER_ROCK_BLOCK;                     // blocked, scrambling at the barrier
+        }
+        break;
+      }
+    }
+
     hunterGap -= closing;
     if (hunterGap <= 0) {
       endGame("hunter");
@@ -600,17 +647,20 @@
   }
 
   // flat, bold-outlined "emoji sticker" style, matching the monkey: just a head with floating hands
-  function drawHunter(hx, groundY, frameNum, swimming) {
+  function drawHunter(hx, groundY, frameNum, swimming, tunnelDip) {
     if (hx < -60 || hx > W + 60) return;
     const swing = Math.sin(frameNum * 0.35);
     const SKIN = "#d8a274";
     const OUTLINE = "#3d2612";
     const HAT = "#c9a24a";
+    const tunneling = tunnelDip > 0;
 
     ctx.save();
-    ctx.translate(hx, swimming ? groundY - 14 : groundY);
+    // swimming rides low on the water; tunnelling drops him down along the arc into the dug hole
+    const yOffset = swimming ? -14 : tunneling ? tunnelDip : 0;
+    ctx.translate(hx, groundY + yOffset);
 
-    if (!swimming) drawSoftShadow(16, 5);
+    if (!swimming && !tunneling) drawSoftShadow(16, 5);
 
     const headY = -24;
 
@@ -710,6 +760,45 @@
     ctx.restore();
   }
 
+  // the dug tunnel as an arc-shaped channel carved under a rock, from its mouth (before the rock)
+  // to the far side (after it). uMax is how far along the arc has been carved so far (0..1), so a
+  // dig-in-progress shows the channel ending partway — exactly where the monkey is still digging.
+  function drawTunnel(rock, uMax) {
+    if (uMax <= 0) return;
+    const entryX = rock.x - ARC_MARGIN;
+    const arcW = rock.w + ARC_MARGIN * 2;
+    // channel follows the monkey's centre line so the monkey rides inside the hole
+    const pathY = (u) => GROUND_Y - monkey.h / 2 + Math.sin(u * Math.PI) * TUNNEL_DEPTH;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, GROUND_Y, W, H - GROUND_Y); // only the part below the surface is an open hole
+    ctx.clip();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    const steps = 26;
+    const trace = () => {
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const u = (uMax * i) / steps;
+        const x = entryX + u * arcW;
+        const y = pathY(u);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+    };
+    ctx.strokeStyle = "#2a1d10"; // soil rim
+    ctx.lineWidth = 56;
+    trace();
+    ctx.stroke();
+    ctx.strokeStyle = "#4a3420"; // dark interior
+    ctx.lineWidth = 44;
+    trace();
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function draw() {
     ctx.clearRect(0, 0, W, H);
 
@@ -755,8 +844,11 @@
       ctx.restore();
     }
 
-    // rocks
+    // rocks: draw the carved tunnel arc first (below ground), then the boulder on the surface
     for (const rock of rocks) {
+      const uMax = rock.tunneled ? 1 : rock.digU;
+      drawTunnel(rock, uMax);
+
       ctx.save();
       ctx.translate(rock.x + rock.w / 2, GROUND_Y - rock.h / 2 + 6);
       ctx.font = `${rock.h + 32}px serif`;
@@ -785,7 +877,7 @@
 
     // hunter chasing from behind
     const hunterX = monkey.x - hunterGap;
-    drawHunter(hunterX, GROUND_Y, frame, hunterSwimming);
+    drawHunter(hunterX, GROUND_Y, frame, hunterSwimming, hunterTunnelDip);
 
     // vine currently carrying the monkey (anchored above its fixed screen position)
     if (monkey.swinging) {
@@ -794,39 +886,33 @@
       drawVineRope(cx, 0, cx, monkey.y + monkey.h / 2, armed);
     }
 
-    // monkey (clipped at ground level while digging, so it visually sinks into the earth)
-    if (monkey.digging) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 0, W, GROUND_Y);
-      ctx.clip();
-      drawMonkey(monkey, frame);
-      ctx.restore();
+    // monkey — drawn in full, on top of the tunnel channel so it shows down inside the hole while
+    // digging along the arc, and normally on the surface otherwise
+    drawMonkey(monkey, frame);
 
-      // dust kicked up around the dig site
+    // dust kicked up at the dig front while actively carving the tunnel
+    if (monkey.digging) {
       const dustX = monkey.x + monkey.w / 2;
-      ctx.fillStyle = "rgba(120,90,50,0.5)";
+      const dustY = monkey.y + monkey.h;
+      ctx.fillStyle = "rgba(120,90,50,0.55)";
       for (let i = 0; i < 3; i++) {
         const a = frame * 0.3 + i * 2;
         ctx.beginPath();
-        ctx.ellipse(dustX + Math.cos(a) * 14, GROUND_Y - 2 + Math.sin(a * 1.7) * 3, 5, 3, 0, 0, Math.PI * 2);
+        ctx.ellipse(dustX + Math.cos(a) * 14, dustY + Math.sin(a * 1.7) * 3, 5, 3, 0, 0, Math.PI * 2);
         ctx.fill();
       }
-    } else {
-      drawMonkey(monkey, frame);
     }
 
-    // dig progress / grace-window hint while stuck at a rock
+    // dig progress bar + "hold down to dig" hint while working through a rock's tunnel
     if (activeRock) {
       const barX = monkey.x - 10;
-      const barY = monkey.y - 14;
+      const barY = monkey.y - 16;
       const barW = 60;
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.fillRect(barX, barY, barW, 6);
-      if (monkey.digging) {
-        ctx.fillStyle = "#d9c23c";
-        ctx.fillRect(barX, barY, barW * (digProgress / ROCK_DIG_DURATION), 6);
-      } else {
+      ctx.fillStyle = "#d9c23c";
+      ctx.fillRect(barX, barY, barW * activeRock.digU, 6);
+      if (!monkey.digging) {
         ctx.fillStyle = "#fff";
         ctx.font = "12px sans-serif";
         ctx.textAlign = "center";
